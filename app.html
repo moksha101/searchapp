@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="ar">
+<head>
+    <meta charset="UTF-8">
+    <title>محرك بحث Excel ديناميكي</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            direction: rtl;
+            margin: 20px;
+            background-color: #f4f4f4;
+        }
+
+        input[type="file"], input[type="text"] {
+            padding: 10px;
+            margin: 10px 0;
+            width: 100%;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        button {
+            padding: 10px;
+            margin: 10px 0;
+            width: 10%;
+            box-sizing: border-box;
+            font-size: 16px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            background: white;
+            margin-top: 20px;
+        }
+
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: right;
+        }
+
+        th {
+            background-color: #2196F3;
+            color: white;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .btn-group > * {
+            flex: 1;
+        }
+
+        #file-links a {
+            display: block;
+            margin-bottom: 5px;
+            color: #007BFF;
+            text-decoration: none;
+            cursor: pointer;
+        }
+
+        #file-links button {
+            margin-right: 10px;
+            background-color: #ff4d4d;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+
+        .file-entry {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background-color: #ffffff;
+            border: 1px solid #ccc;
+            padding: 5px 10px;
+            margin-bottom: 5px;
+        }
+
+        .danger {
+            background-color: #e53935;
+        }
+		#login-screen {
+        position: fixed;
+        top: 0; right: 0; bottom: 0; left: 0;
+        background-color: #fff;
+        z-index: 9999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    #login-box {
+        border: 1px solid #ccc;
+        padding: 20px;
+        background: #fafafa;
+        box-shadow: 0 0 10px rgba(0,0,0,0.2);
+        text-align: center;
+        width: 300px;
+        border-radius: 8px;
+    }
+
+    #login-box input {
+        width: auto;
+        padding: 10px;
+        margin: 10px 0;
+    }
+
+    #login-box button {
+        padding: 10px 20px;
+        background-color: #2196F3;
+        color: white;
+        border: none;
+        cursor: pointer;
+    }
+
+    #app-content {
+        display: none;
+    }
+    </style>
+</head>
+<body>
+
+    <h2>🔍 محرك بحث ديناميكي لملفات Excel</h2>
+<div id="login-screen">
+    <div id="login-box">
+        <h3>🔒 تسجيل الدخول</h3>
+        <input type="password" id="password" placeholder="ادخل كلمة المرور">
+        <button onclick="checkPassword()">دخول</button>
+        <p id="login-error" style="color:red; display:none;">كلمة المرور غير صحيحة</p>
+    </div>
+</div>
+
+<div id="app-content">
+    <!-- محتوى الصفحة الأصلي هنا (كل ما كتبناه سابقًا) -->
+
+    <input type="file" id="upload" accept=".xlsx,.xls" />
+    <input type="text" id="search" placeholder="ابحث هنا..." />
+
+    <div class="btn-group">
+        <button id="save-json">💾 حفظ البيانات في ملف</button>
+        <input type="file" id="load-json" accept=".json" />
+        <button id="clear-all" class="danger">🗑️ حذف جميع الملفات</button>
+    </div>
+
+    <h3>📁 الملفات المرفوعة:</h3>
+    <div id="file-links"></div>
+
+    <div id="results-count"></div>
+    <table id="data-table">
+        <thead id="table-head"></thead>
+        <tbody id="table-body"></tbody>
+    </table>
+
+    <!-- SheetJS -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+    <script>
+        let jsonData = [];
+
+        // حساب البصمة
+        async function calculateFileHash(file) {
+            const buffer = await file.arrayBuffer();
+            const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+            const hashArray = Array.from(new Uint8Array(hashBuffer));
+            return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        // رفع الملف
+        document.getElementById('upload').addEventListener('change', async function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const fileHash = await calculateFileHash(file);
+            let uploadedFiles = JSON.parse(localStorage.getItem('uploadedHashes') || '[]');
+
+            if (uploadedFiles.includes(fileHash)) {
+                alert("⚠️ تم رفع هذا الملف مسبقًا.");
+                return;
+            }
+
+            uploadedFiles.push(fileHash);
+            localStorage.setItem('uploadedHashes', JSON.stringify(uploadedFiles));
+
+            const reader = new FileReader();
+            reader.onload = function (e) {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const sheet = workbook.Sheets[workbook.SheetNames[0]];
+                jsonData = XLSX.utils.sheet_to_json(sheet);
+                renderTable(jsonData);
+                saveFileToLocal(file.name, jsonData);
+            };
+            reader.readAsArrayBuffer(file);
+        });
+
+        // البحث
+        document.getElementById('search').addEventListener('input', function (e) {
+            const searchTerm = e.target.value.toLowerCase();
+            const filtered = jsonData.filter(row =>
+                Object.values(row).some(val =>
+                    String(val).toLowerCase().includes(searchTerm)
+                )
+            );
+            renderTable(filtered);
+        });
+
+        // حفظ البيانات في ملف JSON
+        document.getElementById('save-json').addEventListener('click', function () {
+            if (!jsonData.length) {
+                alert("لا توجد بيانات لحفظها.");
+                return;
+            }
+            const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'excel_data.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        // تحميل بيانات من ملف JSON
+        document.getElementById('load-json').addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = function (event) {
+                try {
+                    jsonData = JSON.parse(event.target.result);
+                    renderTable(jsonData);
+                } catch (error) {
+                    alert("❌ فشل تحميل الملف. تأكد من صحته.");
+                }
+            };
+            reader.readAsText(file);
+        });
+
+        // مسح جميع الملفات
+        document.getElementById('clear-all').addEventListener('click', function () {
+            if (confirm("هل أنت متأكد أنك تريد حذف جميع الملفات؟")) {
+                const keys = Object.keys(localStorage);
+                keys.forEach(key => {
+                    if (key.startsWith("file_") || key === "uploadedHashes") {
+                        localStorage.removeItem(key);
+                    }
+                });
+                document.getElementById('file-links').innerHTML = '';
+                document.getElementById('table-head').innerHTML = '';
+                document.getElementById('table-body').innerHTML = '';
+                document.getElementById('results-count').textContent = '';
+                alert("✅ تم حذف كل شيء.");
+            }
+        });
+
+        // حفظ الملف داخل localStorage
+        function saveFileToLocal(name, data) {
+            localStorage.setItem(`file_${name}`, JSON.stringify(data));
+            updateFileLinks(name);
+        }
+
+        // عرض رابط لملف جديد
+        function updateFileLinks(fileName) {
+            const container = document.getElementById('file-links');
+            if (document.querySelector(`[data-file="${fileName}"]`)) return;
+
+            const wrapper = document.createElement('div');
+            wrapper.className = 'file-entry';
+
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = fileName;
+            link.dataset.file = fileName;
+
+            link.onclick = function () {
+                const data = localStorage.getItem(`file_${fileName}`);
+                if (data) {
+                    jsonData = JSON.parse(data);
+                    renderTable(jsonData);
+                } else {
+                    alert("الملف غير موجود.");
+                }
+            };
+
+            const deleteBtn = document.createElement('button');
+            deleteBtn.textContent = '🗑️ حذف';
+            deleteBtn.onclick = function () {
+                if (confirm(`هل تريد حذف "${fileName}"؟`)) {
+                    localStorage.removeItem(`file_${fileName}`);
+                    wrapper.remove();
+                }
+            };
+
+            wrapper.appendChild(link);
+            wrapper.appendChild(deleteBtn);
+            container.appendChild(wrapper);
+        }
+
+        // عند تحميل الصفحة
+        window.addEventListener('DOMContentLoaded', function () {
+            const keys = Object.keys(localStorage);
+            keys.forEach(key => {
+                if (key.startsWith("file_")) {
+                    const fileName = key.replace("file_", "");
+                    updateFileLinks(fileName);
+                }
+            });
+        });
+
+        // عرض البيانات
+        function renderTable(data) {
+            const tableHead = document.getElementById('table-head');
+            const tableBody = document.getElementById('table-body');
+            const count = document.getElementById('results-count');
+
+            tableHead.innerHTML = '';
+            tableBody.innerHTML = '';
+            count.textContent = `عدد النتائج: ${data.length}`;
+
+            if (data.length === 0) return;
+
+            // إنشاء رأس الجدول (headers)
+            const headers = Object.keys(data[0]);
+            const headerRow = document.createElement('tr');
+            headers.forEach(header => {
+                const th = document.createElement('th');
+                th.textContent = header;
+                headerRow.appendChild(th);
+            });
+            tableHead.appendChild(headerRow);
+
+            // إضافة بيانات الجدول (rows)
+            data.forEach(row => {
+                const tr = document.createElement('tr');
+                headers.forEach(header => {
+                    const td = document.createElement('td');
+                    td.textContent = row[header] || '';
+                    tr.appendChild(td);
+                });
+                tableBody.appendChild(tr);
+            });
+        }
+		
+    </script>
+	<script>
+// ====== تسجيل الدخول ======
+const correctPassword = "12345"; // ← يمكنك تغييرها هنا
+
+function checkPassword() {
+    const input = document.getElementById('password').value;
+    if (input === correctPassword) {
+        localStorage.setItem('access_granted', 'yes');
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app-content').style.display = 'block';
+    } else {
+        document.getElementById('login-error').style.display = 'block';
+    }
+}
+
+// التحقق عند تحميل الصفحة
+window.addEventListener('DOMContentLoaded', function () {
+    const access = localStorage.getItem('access_granted');
+    if (access === 'yes') {
+        document.getElementById('login-screen').style.display = 'none';
+        document.getElementById('app-content').style.display = 'block';
+    }
+});
+
+    </script>
+</body>
+</html>
+
